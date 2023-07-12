@@ -89,8 +89,9 @@ pub fn derive_deserializer(input: proc_macro::TokenStream) -> proc_macro::TokenS
             );
             return quote!(
                 impl #ident {
-                    pub fn parse(encoded: Vec<u8>) -> #ident {
-                        let mut decoded = encoded.array_chunks::<2>();
+                    pub fn parse(reader: &mut DecodeHelper) -> #ident {
+                        let mut decoded = reader.buffer[reader.pos..12 + reader.pos].array_chunks::<2>();
+                        reader.pos += 12;
                         #set_fields
                         #ident {
                             #build_fields
