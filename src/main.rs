@@ -1,7 +1,7 @@
 #![feature(array_chunks)]
 
 use core::{panic};
-use std::{string, io::{Write, Read, Bytes, BufReader}, str::FromStr, net::UdpSocket};
+use std::{string, io::{Write, Read, Bytes, BufReader}, str::FromStr, net::{UdpSocket, Ipv6Addr, SocketAddrV6}};
 
 use dns_weekend::{Serializer, Deserializer};
 use rand::prelude::*;
@@ -71,6 +71,15 @@ impl DNSRecord {
                 data = reader.buffer[reader.pos..reader.pos + data_len as usize].to_vec();
                 reader.pos += data_len as usize;
             }
+            Some(DnsType::TYPE_AAAA) => {
+                data = reader.buffer[reader.pos..reader.pos + data_len as usize].to_vec();
+                reader.pos += data_len as usize;
+            }
+            Some(DnsType::TYPE_CNAME) => {
+                data = decode_name(reader);
+                // data = reader.buffer[reader.pos..reader.pos + data_len as usize].to_vec();
+                // reader.pos += data_len as usize;
+            }
             _ => panic!("Wrong dns type: {type_}")
         }
         DNSRecord { name, type_, class, ttl, data }
@@ -112,9 +121,9 @@ impl DNSPacket {
         DNSPacket { header, questions, answers, authorities, additionals }
     }
 
-    fn get_answer(&self) -> Option<Vec<u8>> {
+    fn get_answer(&self, name: Option<String>) -> Option<Vec<u8>> {
         for answer in &self.answers {
-            if answer.type_ == DnsType::TYPE_A as u16 {
+            if answer.type_ == DnsType::TYPE_A as u16 || answer.type_ == DnsType::TYPE_AAAA as u16 {
                 return Some(answer.data.clone())
             }
         }
@@ -123,7 +132,7 @@ impl DNSPacket {
 
     fn get_nameserver_ip(&self) -> Option<Vec<u8>> {
         for answer in &self.additionals {
-            if answer.type_ == DnsType::TYPE_A as u16 {
+            if answer.type_ == DnsType::TYPE_A as u16 || answer.type_ == DnsType::TYPE_AAAA as u16 {
                 return Some(answer.data.clone())
             }
         }
@@ -134,6 +143,15 @@ impl DNSPacket {
         for answer in &self.authorities {
             if answer.type_ == DnsType::TYPE_NS as u16 {
                 return Some(std::str::from_utf8(answer.data.as_slice()).unwrap().as_bytes().to_vec())
+            }
+        }
+        None
+    }
+
+    fn get_cname(&self) -> Option<Vec<u8>> {
+        for answer in &self.answers {
+            if answer.type_ == DnsType::TYPE_CNAME as u16 {
+                return Some(answer.data.clone())
             }
         }
         None
@@ -186,12 +204,13 @@ fn encode_dns_name(domain_name: String) -> Vec<u8> {
 const RECURSION_DESIRED: u16 = 1 << 8;
 const CLASS_IN: u16 = 1;
 
-
 #[derive(FromPrimitive)]
 enum DnsType {
     TYPE_A = 1,
     TYPE_NS = 2,
+    TYPE_CNAME = 5,
     TYPE_TXT = 16,
+    TYPE_AAAA = 28,
 }
 
 fn build_query(domain_name: String, record_type: u16) -> Vec<u8> {
@@ -215,8 +234,14 @@ fn build_query(domain_name: String, record_type: u16) -> Vec<u8> {
 
 fn send_query(ip_address: String, domain_name: String, record_type: u16) -> Result<DNSPacket> {
     let query = build_query(domain_name, record_type);
-    let socket = UdpSocket::bind("0.0.0.0:8964").expect("Bind failed"); // TODO: Why is 127.0.0.1 not working
+    let mut socket: UdpSocket;
+    if Ipv6Addr::from_str(&ip_address[0..ip_address.rfind(":").unwrap() - 1]).is_ok() {
+        socket = UdpSocket::bind(":::8964").expect("Bind failed");
+    } else {
+        socket = UdpSocket::bind("0.0.0.0:8964").expect("Bind failed");
+    }
     socket.send_to(query.as_slice(), ip_address).expect("Send failed");
+
     let mut buf = [0 as u8; 1024];
     socket.recv_from(&mut buf).expect("Receive failed");
     let mut reader = DecodeHelper {
@@ -227,16 +252,22 @@ fn send_query(ip_address: String, domain_name: String, record_type: u16) -> Resu
 }
 
 fn resolve(domain_name: String, record_type: u16) -> Vec<u8> {
-    let mut nameserver_ip = "198.41.0.4".to_string();
+    let mut nameserver_ip = "198.41.0.4:53".to_string();
+    let mut domain_name = domain_name;
     loop {
         println!("querying {nameserver_ip} for {domain_name}");
+        let record: Option<String> = None;
         let resp = send_query(nameserver_ip.clone(), domain_name.clone(), record_type).unwrap();
-        if let Some(ip) = resp.get_answer() {
+        if let Some(domain) = resp.get_cname() {
+            println!("{:?}", domain);
+            return Vec::<u8>::new()
+        } else if let Some(ip) = resp.get_answer(record) {
             return ip
-        } else if let Some(nsIP) = resp.get_nameserver_ip() {
-            nameserver_ip = std::str::from_utf8(nsIP.as_slice()).unwrap().to_string();
+        } else if let Some(ns_ip) = resp.get_nameserver_ip() {
+            nameserver_ip = ip_to_string(&ns_ip) + ":53";
         } else if let Some(ns_domain) = resp.get_nameserver() {
-            nameserver_ip = std::str::from_utf8(resolve(std::str::from_utf8(ns_domain.as_slice()).unwrap().to_string(), DnsType::TYPE_A as u16).as_slice()).unwrap().to_string()
+            nameserver_ip = std::str::from_utf8(resolve(std::str::from_utf8(ns_domain.as_slice()).unwrap().to_string(), DnsType::TYPE_A as u16).as_slice()).unwrap().to_string();
+            println!("{nameserver_ip}")
         } else {
             panic!("Something went wrong");
         }
@@ -245,11 +276,20 @@ fn resolve(domain_name: String, record_type: u16) -> Vec<u8> {
 
 fn ip_to_string(ip: &Vec<u8>) -> String {
     let mut nip = String::new();
-    for byte in ip {
-        nip += &byte.to_string();
-        nip += ".";
+    if ip.len() == 4 {
+        for byte in ip {
+            nip += &byte.to_string();
+            nip += ".";
+        }
+        nip.strip_suffix(".").unwrap().to_string()
+    } else {
+        let mut bytes = ip.array_chunks::<2>();
+        while let Some(slice) = bytes.next() {
+            nip += &format!("{:x}", u16::from_be_bytes(*slice));
+            nip += ":";
+        } 
+        nip.strip_suffix(":").unwrap().to_string()
     }
-    nip.strip_suffix(".").unwrap().to_string()
 }
 
 fn lookup_domain(domain_name: String) -> String {
@@ -258,7 +298,8 @@ fn lookup_domain(domain_name: String) -> String {
 }
 
 fn main() {
-    println!("{:?}", build_query("google.com".to_owned(), DnsType::TYPE_A as u16));
+    println!("{}", SocketAddrV6::new(Ipv6Addr::new(0x2001, 0x4860, 0x4802, 0x0034, 0, 0, 0, 0xa), 53, 0, 0)); //SocketAddrV6::new(ip, port, flowinfo, scope_id)
+    send_query("[2001:4860:4802:34::a]:53".to_owned(), "google.com".to_owned(), DnsType::TYPE_AAAA as u16);
 }
 
 #[test]
@@ -328,13 +369,26 @@ fn test_build_query() {
 }
 
 #[test]
-fn test_part1() {
-    let packet = send_query("8.8.8.8:53".to_owned(), "www.example.com".to_owned(), DnsType::TYPE_A as u16).unwrap();
-    println!("{:?}", packet);
+fn test_send_query() {
+    println!("{:?}", send_query("8.8.8.8:53".to_owned(), "www.example.com".to_owned(), DnsType::TYPE_A as u16).unwrap());
+    println!("{:?}", send_query("8.8.8.8:53".to_owned(), "google.com".to_owned(), DnsType::TYPE_A as u16).unwrap());
+    println!("{:?}", send_query("8.8.8.8:53".to_owned(), "www.facebook.com".to_owned(), DnsType::TYPE_A as u16).unwrap());
 }
 
 #[test]
 fn test_lookup_domain() {
     println!("{:?}", lookup_domain("google.com".to_owned()));
+    println!("{:?}", lookup_domain("example.com".to_owned()));
+    println!("{:?}", lookup_domain("recurse.com".to_owned()));
+    println!("{:?}", lookup_domain("metafilter.com".to_owned()));
+    println!("{:?}", lookup_domain("www.metafilter.com".to_owned()));
+    println!("{:?}", lookup_domain("www.facebook.com".to_owned()));
+}
+
+#[test]
+fn test_resolve() {
+    println!("{:?}", resolve("google.com".to_owned(), DnsType::TYPE_A as u16));
+    println!("{:?}", resolve("www.metafilter.com".to_owned(), DnsType::TYPE_A as u16));
+    // println!("{:?}", resolve("www.facebook.com".to_owned(), DnsType::TYPE_A as u16));
 }
 
