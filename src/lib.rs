@@ -1,7 +1,6 @@
 use proc_macro2::TokenStream;
 use quote::quote;
-use std::fmt::Debug;
-use syn::{parse_macro_input, Data, DeriveInput, Field, Fields, Type, TypeSlice};
+use syn::{parse_macro_input, Data, DeriveInput, Field, Fields, Type};
 extern crate proc_macro;
 
 #[proc_macro_derive(Serializer)]

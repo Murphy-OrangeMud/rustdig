@@ -2,12 +2,7 @@
 #![feature(duration_constants)]
 
 use core::panic;
-use std::{
-    io::{BufReader, Bytes, Read, Write},
-    net::{Ipv6Addr, SocketAddrV6, UdpSocket, Ipv4Addr},
-    str::FromStr,
-    string,
-};
+use std::str::FromStr;
 
 use rand::prelude::*;
 use rsdig::{Deserializer, Serializer};
@@ -15,7 +10,7 @@ use std::collections::HashMap;
 use std::io::Result;
 
 use clap::{arg, Command};
-use std::net::{IpAddr, SocketAddr, TcpStream};
+use std::net::{IpAddr, UdpSocket, Ipv6Addr};
 use std::process::exit;
 use std::time::{Duration, Instant};
 

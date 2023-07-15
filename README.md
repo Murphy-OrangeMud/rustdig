@@ -1,5 +1,4 @@
 # Rust dig
----------------------
 
 A DNS query tool like dig inspired by [DNS-in-a-weekend](https://implement-dns.wizardzines.com/) written in Rust.
 
