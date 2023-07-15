@@ -1,7 +1,7 @@
 # Rust dig
 ---------------------
 
-A toy DNS server inspired by [DNS-in-a-weekend](https://implement-dns.wizardzines.com/) written in Rust.
+A DNS query tool like dig inspired by [DNS-in-a-weekend](https://implement-dns.wizardzines.com/) written in Rust.
 
 ### Test
 Because the implementation utilizes Rust macros, the tests should only be started manually. `cargo test` will fail.
