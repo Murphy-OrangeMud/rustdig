@@ -7,7 +7,7 @@ A toy DNS server inspired by [DNS-in-a-weekend](https://implement-dns.wizardzine
 Because the implementation utilizes Rust macros, the tests should only be started manually. `cargo test` will fail.
 
 ### Start
-Just type `cargo run` to start!
+Just type `cargo run` to start, add --name flag to specify the domain name you want to look up.
 
 ### Features
 - [x] Utilizes Rust macro to generate parsing function
@@ -15,6 +15,7 @@ Just type `cargo run` to start!
 - [x] Support CName records
 - [x] DNS Cache
 - [x] Support commandline use
+- [ ] DNS Server
 - [ ] Support EDNS0
 - [ ] Support DNS over TCP
 - [ ] Support DNS over TLS
