@@ -1,13 +1,23 @@
 #![feature(array_chunks)]
+#![feature(duration_constants)]
 
-use core::{panic};
-use std::{string, io::{Write, Read, Bytes, BufReader}, str::FromStr, net::{UdpSocket, Ipv6Addr, SocketAddrV6}};
+use core::panic;
+use std::{
+    io::{BufReader, Bytes, Read, Write},
+    net::{Ipv6Addr, SocketAddrV6, UdpSocket, Ipv4Addr},
+    str::FromStr,
+    string,
+};
 
-use dns_weekend::{Serializer, Deserializer};
 use rand::prelude::*;
+use rsdig::{Deserializer, Serializer};
+use std::collections::HashMap;
 use std::io::Result;
 
+use clap::{arg, Command};
 use std::net::{IpAddr, SocketAddr, TcpStream};
+use std::process::exit;
+use std::time::{Duration, Instant};
 
 extern crate num;
 #[macro_use]
@@ -33,10 +43,20 @@ struct DNSQuestion {
 impl DNSQuestion {
     pub fn parse(reader: &mut DecodeHelper) -> DNSQuestion {
         let mut name = decode_name(reader);
-        let type_ = u16::from_be_bytes(*reader.buffer[reader.pos..reader.pos + 2].array_chunks::<2>().next().unwrap());
-        let class = u16::from_be_bytes(*reader.buffer[reader.pos + 2..reader.pos + 4].array_chunks::<2>().next().unwrap());
+        let type_ = u16::from_be_bytes(
+            *reader.buffer[reader.pos..reader.pos + 2]
+                .array_chunks::<2>()
+                .next()
+                .unwrap(),
+        );
+        let class = u16::from_be_bytes(
+            *reader.buffer[reader.pos + 2..reader.pos + 4]
+                .array_chunks::<2>()
+                .next()
+                .unwrap(),
+        );
         reader.pos += 4 as usize;
-        DNSQuestion{ name, type_, class, }
+        DNSQuestion { name, type_, class }
     }
 }
 
@@ -53,10 +73,30 @@ impl DNSRecord {
     pub fn parse(reader: &mut DecodeHelper) -> DNSRecord {
         let mut name = decode_name(reader);
         let mut data: Vec<u8>;
-        let type_ = u16::from_be_bytes(*reader.buffer[reader.pos..reader.pos + 2].array_chunks::<2>().next().unwrap());
-        let class = u16::from_be_bytes(*reader.buffer[reader.pos + 2..reader.pos + 4].array_chunks::<2>().next().unwrap());
-        let ttl = u32::from_be_bytes(*reader.buffer[reader.pos + 4..reader.pos + 8].array_chunks::<4>().next().unwrap());
-        let data_len = u16::from_be_bytes(*reader.buffer[reader.pos + 8..reader.pos + 10].array_chunks::<2>().next().unwrap());
+        let type_ = u16::from_be_bytes(
+            *reader.buffer[reader.pos..reader.pos + 2]
+                .array_chunks::<2>()
+                .next()
+                .unwrap(),
+        );
+        let class = u16::from_be_bytes(
+            *reader.buffer[reader.pos + 2..reader.pos + 4]
+                .array_chunks::<2>()
+                .next()
+                .unwrap(),
+        );
+        let ttl = u32::from_be_bytes(
+            *reader.buffer[reader.pos + 4..reader.pos + 8]
+                .array_chunks::<4>()
+                .next()
+                .unwrap(),
+        );
+        let data_len = u16::from_be_bytes(
+            *reader.buffer[reader.pos + 8..reader.pos + 10]
+                .array_chunks::<2>()
+                .next()
+                .unwrap(),
+        );
         reader.pos += 10;
         // encoded = encoded[10..encoded.len()].to_vec();
         match num::FromPrimitive::from_u16(type_) {
@@ -64,7 +104,7 @@ impl DNSRecord {
                 data = decode_name(reader);
             }
             Some(DnsType::TYPE_A) => {
-                data = reader.buffer[reader.pos..reader.pos + data_len as usize].to_vec();//.join(b"."); // IP addr
+                data = reader.buffer[reader.pos..reader.pos + data_len as usize].to_vec(); //.join(b"."); // IP addr
                 reader.pos += data_len as usize;
             }
             Some(DnsType::TYPE_TXT) => {
@@ -80,9 +120,15 @@ impl DNSRecord {
                 // data = reader.buffer[reader.pos..reader.pos + data_len as usize].to_vec();
                 // reader.pos += data_len as usize;
             }
-            _ => panic!("Wrong dns type: {type_}")
+            _ => panic!("Wrong dns type: {type_}"),
         }
-        DNSRecord { name, type_, class, ttl, data }
+        DNSRecord {
+            name,
+            type_,
+            class,
+            ttl,
+            data,
+        }
     }
 }
 
@@ -118,13 +164,19 @@ impl DNSPacket {
             let additional = DNSRecord::parse(reader);
             additionals.push(additional);
         }
-        DNSPacket { header, questions, answers, authorities, additionals }
+        DNSPacket {
+            header,
+            questions,
+            answers,
+            authorities,
+            additionals,
+        }
     }
 
     fn get_answer(&self, name: Option<String>) -> Option<Vec<u8>> {
         for answer in &self.answers {
             if answer.type_ == DnsType::TYPE_A as u16 || answer.type_ == DnsType::TYPE_AAAA as u16 {
-                return Some(answer.data.clone())
+                return Some(answer.data.clone());
             }
         }
         None
@@ -133,7 +185,7 @@ impl DNSPacket {
     fn get_nameserver_ip(&self) -> Option<Vec<u8>> {
         for answer in &self.additionals {
             if answer.type_ == DnsType::TYPE_A as u16 || answer.type_ == DnsType::TYPE_AAAA as u16 {
-                return Some(answer.data.clone())
+                return Some(answer.data.clone());
             }
         }
         None
@@ -142,7 +194,12 @@ impl DNSPacket {
     fn get_nameserver(&self) -> Option<Vec<u8>> {
         for answer in &self.authorities {
             if answer.type_ == DnsType::TYPE_NS as u16 {
-                return Some(std::str::from_utf8(answer.data.as_slice()).unwrap().as_bytes().to_vec())
+                return Some(
+                    std::str::from_utf8(answer.data.as_slice())
+                        .unwrap()
+                        .as_bytes()
+                        .to_vec(),
+                );
             }
         }
         None
@@ -151,7 +208,7 @@ impl DNSPacket {
     fn get_cname(&self) -> Option<Vec<u8>> {
         for answer in &self.answers {
             if answer.type_ == DnsType::TYPE_CNAME as u16 {
-                return Some(answer.data.clone())
+                return Some(answer.data.clone());
             }
         }
         None
@@ -172,11 +229,19 @@ fn decode_name(reader: &mut DecodeHelper) -> Vec<u8> {
             break;
         }
         if length & 0b1100_0000 != 0 {
-            parts.push(std::str::from_utf8(decode_compressed_name(length, reader).as_slice()).unwrap().to_string());
+            parts.push(
+                std::str::from_utf8(decode_compressed_name(length, reader).as_slice())
+                    .unwrap()
+                    .to_string(),
+            );
             break;
         } else {
             reader.pos += length as usize;
-            parts.push(std::str::from_utf8(&reader.buffer[reader.pos - length as usize..reader.pos]).unwrap().to_string());
+            parts.push(
+                std::str::from_utf8(&reader.buffer[reader.pos - length as usize..reader.pos])
+                    .unwrap()
+                    .to_string(),
+            );
         }
     }
     parts.join(".").as_bytes().to_vec()
@@ -196,7 +261,12 @@ fn decode_compressed_name(length: u8, reader: &mut DecodeHelper) -> Vec<u8> {
 fn encode_dns_name(domain_name: String) -> Vec<u8> {
     let mut encoded = Vec::new();
     for part in domain_name.split('.') {
-        encoded = [encoded, (part.len() as u8).to_be_bytes().to_vec(), part.to_ascii_lowercase().as_bytes().to_owned()].concat()
+        encoded = [
+            encoded,
+            (part.len() as u8).to_be_bytes().to_vec(),
+            part.to_ascii_lowercase().as_bytes().to_owned(),
+        ]
+        .concat()
     }
     [encoded, (0 as u8).to_be_bytes().to_vec()].concat()
 }
@@ -211,6 +281,24 @@ enum DnsType {
     TYPE_CNAME = 5,
     TYPE_TXT = 16,
     TYPE_AAAA = 28,
+}
+
+fn ip_to_string(ip: &Vec<u8>) -> String {
+    let mut nip = String::new();
+    if ip.len() == 4 {
+        for byte in ip {
+            nip += &byte.to_string();
+            nip += ".";
+        }
+        nip.strip_suffix(".").unwrap().to_string()
+    } else {
+        let mut bytes = ip.array_chunks::<2>();
+        while let Some(slice) = bytes.next() {
+            nip += &format!("{:x}", u16::from_be_bytes(*slice));
+            nip += ":";
+        }
+        nip.strip_suffix(":").unwrap().to_string()
+    }
 }
 
 fn build_query(domain_name: String, record_type: u16) -> Vec<u8> {
@@ -229,84 +317,149 @@ fn build_query(domain_name: String, record_type: u16) -> Vec<u8> {
         type_: record_type,
         class: CLASS_IN,
     };
-    return [header.to_bytes(), question.to_bytes()].concat()
-}
-
-fn send_query(ip_address: String, domain_name: String, record_type: u16) -> Result<DNSPacket> {
-    let query = build_query(domain_name, record_type);
-    let mut socket: UdpSocket;
-    if Ipv6Addr::from_str(&ip_address[0..ip_address.rfind(":").unwrap() - 1]).is_ok() {
-        socket = UdpSocket::bind(":::8964").expect("Bind failed");
-    } else {
-        socket = UdpSocket::bind("0.0.0.0:8964").expect("Bind failed");
-    }
-    socket.send_to(query.as_slice(), ip_address).expect("Send failed");
-
-    let mut buf = [0 as u8; 1024];
-    socket.recv_from(&mut buf).expect("Receive failed");
-    let mut reader = DecodeHelper {
-        buffer: buf.to_vec(),
-        pos: 0,
-    };
-    Ok(DNSPacket::parse(&mut reader))
-}
-
-fn resolve(domain_name: String, record_type: u16) -> Vec<u8> {
-    let mut nameserver_ip = "198.41.0.4:53".to_string();
-    let mut domain_name = domain_name;
-    loop {
-        println!("querying {nameserver_ip} for {domain_name}");
-        let record: Option<String> = None;
-        let resp = send_query(nameserver_ip.clone(), domain_name.clone(), record_type).unwrap();
-        if let Some(domain) = resp.get_cname() {
-            println!("{:?}", domain);
-            return Vec::<u8>::new()
-        } else if let Some(ip) = resp.get_answer(record) {
-            return ip
-        } else if let Some(ns_ip) = resp.get_nameserver_ip() {
-            nameserver_ip = ip_to_string(&ns_ip) + ":53";
-        } else if let Some(ns_domain) = resp.get_nameserver() {
-            nameserver_ip = std::str::from_utf8(resolve(std::str::from_utf8(ns_domain.as_slice()).unwrap().to_string(), DnsType::TYPE_A as u16).as_slice()).unwrap().to_string();
-            println!("{nameserver_ip}")
-        } else {
-            panic!("Something went wrong");
-        }
-    }
-}
-
-fn ip_to_string(ip: &Vec<u8>) -> String {
-    let mut nip = String::new();
-    if ip.len() == 4 {
-        for byte in ip {
-            nip += &byte.to_string();
-            nip += ".";
-        }
-        nip.strip_suffix(".").unwrap().to_string()
-    } else {
-        let mut bytes = ip.array_chunks::<2>();
-        while let Some(slice) = bytes.next() {
-            nip += &format!("{:x}", u16::from_be_bytes(*slice));
-            nip += ":";
-        } 
-        nip.strip_suffix(":").unwrap().to_string()
-    }
+    return [header.to_bytes(), question.to_bytes()].concat();
 }
 
 fn lookup_domain(domain_name: String) -> String {
-    let packet = send_query("8.8.8.8:53".to_owned(), domain_name, DnsType::TYPE_A as u16).expect("Send query failed");
+    // let packet = resolve(domain_name, DnsType::TYPE_A as u16);
+    let packet = DNSResolver::new(None).send_query("8.8.8.8:53".to_owned(), domain_name, DnsType::TYPE_A as u16)
+        .expect("Send query failed");
     ip_to_string(&packet.answers[0].data)
 }
 
+struct DNSResolver {
+    cache: HashMap<String, (String, Instant)>,
+    dns_server: String,
+}
+
+impl DNSResolver {
+    pub fn new(dns_server: Option<&String>) -> DNSResolver {
+        if dns_server.is_none() || IpAddr::from_str(dns_server.unwrap()).is_err() {
+            DNSResolver {
+                cache: HashMap::<String, (String, Instant)>::new(),
+                dns_server: "198.41.0.4".to_string(),
+            }
+        } else {
+            DNSResolver {
+                cache: HashMap::<String, (String, Instant)>::new(),
+                dns_server: dns_server.unwrap().to_string(),
+            }
+        }
+    }
+    
+    pub fn send_query(&mut self, ip_address: String, domain_name: String, record_type: u16) -> Result<DNSPacket> {
+        let query = build_query(domain_name, record_type);
+        let mut socket: UdpSocket;
+        if Ipv6Addr::from_str(&ip_address[0..ip_address.rfind(":").unwrap()]).is_ok() {
+            socket = UdpSocket::bind(":::1234").expect("Bind failed");
+        } else {
+            socket = UdpSocket::bind("0.0.0.0:1234").expect("Bind failed");
+        }
+        socket
+            .send_to(query.as_slice(), ip_address)
+            .expect("Send failed");
+
+        let mut buf = [0 as u8; 1024];
+        socket.recv_from(&mut buf).expect("Receive failed");
+        let mut reader = DecodeHelper {
+            buffer: buf.to_vec(),
+            pos: 0,
+        };
+        Ok(DNSPacket::parse(&mut reader))
+    }
+
+    pub fn resolve(&mut self, domain_name_: String, record_type: u16) -> String {
+        let mut nameserver_ip = self.dns_server.clone() + ":53";
+        let mut domain_name = domain_name_.clone();
+        loop {
+            println!("querying {nameserver_ip} for {domain_name}");
+            let opt = self.cache.get(&domain_name);
+            if opt.is_some() && opt.unwrap().1.elapsed().as_secs() < Duration::SECOND.as_secs() * 7200 {
+                return opt.unwrap().0.clone();
+            }
+            let record: Option<String> = None;
+            let resp = self.send_query(nameserver_ip.clone(), domain_name.clone(), record_type).unwrap();
+            if let Some(domain) = resp.get_cname() {
+                domain_name = std::str::from_utf8(&domain).unwrap().to_owned();
+            } else if let Some(ip) = resp.get_answer(record) {
+                self.cache.insert(domain_name_.clone(), (ip_to_string(&ip), Instant::now()));
+                return ip_to_string(&ip);
+            } else if let Some(ns_ip) = resp.get_nameserver_ip() {
+                nameserver_ip = ip_to_string(&ns_ip) + ":53";
+            } else if let Some(ns_domain) = resp.get_nameserver() {
+                nameserver_ip = 
+                    self.resolve(
+                        std::str::from_utf8(ns_domain.as_slice())
+                            .unwrap()
+                            .to_string(),
+                        DnsType::TYPE_A as u16,
+                    );
+                println!("{nameserver_ip}")
+            } else {
+                panic!("Something went wrong");
+            }
+        }
+    }
+}
+
 fn main() {
-    println!("{}", SocketAddrV6::new(Ipv6Addr::new(0x2001, 0x4860, 0x4802, 0x0034, 0, 0, 0, 0xa), 53, 0, 0)); //SocketAddrV6::new(ip, port, flowinfo, scope_id)
-    send_query("[2001:4860:4802:34::a]:53".to_owned(), "google.com".to_owned(), DnsType::TYPE_AAAA as u16);
+    let matches = Command::new(env!("CARGO_PKG_NAME"))
+        .version(env!("CARGO_PKG_VERSION"))
+        .author(env!("CARGO_PKG_AUTHORS"))
+        .about(env!("CARGO_PKG_DESCRIPTION"))
+        .disable_help_subcommand(true)
+        .args(
+            [
+                arg!(-n --domain_name <DOMAIN_NAME> "The domain name you want to lookup"),
+                arg!(-v --version <IP_VERSION> "The ip address version you want to lookup, 4 or 6, default IPv4"),
+                arg!(-s --server_ip <IPADDR> "The IP address and port you want to listen on"),
+                arg!(-d --dns_server <DNS_SERVER> "The dns server to be sent query, default 198.41.0.4"),
+                // arg!(-f --file_path <FILE_PATH> "The file path with dns server listed"),
+            ]
+        ).get_matches();
+
+    let domain_name = matches.get_one::<String>("domain_name");
+    let server_ip = matches.get_one::<String>("server_ip");
+    let version = *matches.get_one::<i32>("version").unwrap_or(&4);
+    let dns_server = matches.get_one::<String>("dns_server");
+
+    if domain_name.is_none() && server_ip.is_none() {
+        eprintln!(
+            "Error: you must specify one of domain_name (for dig) and server ip (for server mode)"
+        );
+        exit(1);
+    } else if domain_name.is_some() {
+        let mut resolver = DNSResolver::new(dns_server);
+        if version == 4 {
+            println!(
+                "{}",
+                resolver.resolve(domain_name.unwrap().to_owned(), DnsType::TYPE_A as u16)
+            );
+        } else if version == 6 {
+            println!(
+                "{}",
+                resolver.resolve(domain_name.unwrap().to_owned(), DnsType::TYPE_AAAA as u16)
+            );
+        } else {
+            eprintln!("Unknown IP version");
+            exit(1);
+        }
+    } else {
+
+    }
 }
 
 #[test]
 fn test_encode_dns_name() {
     println!("{:?}", ("google".as_bytes().len() as u8).to_be_bytes());
     println!("{:?}", encode_dns_name("google.com".to_owned()));
-    assert_eq!(decode_name(&mut DecodeHelper{buffer:encode_dns_name("google.com".to_owned()), pos:0}), "google.com".as_bytes())
+    assert_eq!(
+        decode_name(&mut DecodeHelper {
+            buffer: encode_dns_name("google.com".to_owned()),
+            pos: 0
+        }),
+        "google.com".as_bytes()
+    )
 }
 
 #[test]
@@ -370,9 +523,34 @@ fn test_build_query() {
 
 #[test]
 fn test_send_query() {
-    println!("{:?}", send_query("8.8.8.8:53".to_owned(), "www.example.com".to_owned(), DnsType::TYPE_A as u16).unwrap());
-    println!("{:?}", send_query("8.8.8.8:53".to_owned(), "google.com".to_owned(), DnsType::TYPE_A as u16).unwrap());
-    println!("{:?}", send_query("8.8.8.8:53".to_owned(), "www.facebook.com".to_owned(), DnsType::TYPE_A as u16).unwrap());
+    let mut resolver = DNSResolver::new(None);
+    println!(
+        "{:?}",
+        resolver.send_query(
+            "8.8.8.8:53".to_owned(),
+            "www.example.com".to_owned(),
+            DnsType::TYPE_A as u16
+        )
+        .unwrap()
+    );
+    println!(
+        "{:?}",
+        resolver.send_query(
+            "8.8.8.8:53".to_owned(),
+            "google.com".to_owned(),
+            DnsType::TYPE_A as u16
+        )
+        .unwrap()
+    );
+    println!(
+        "{:?}",
+        resolver.send_query(
+            "8.8.8.8:53".to_owned(),
+            "www.facebook.com".to_owned(),
+            DnsType::TYPE_A as u16
+        )
+        .unwrap()
+    );
 }
 
 #[test]
@@ -387,8 +565,14 @@ fn test_lookup_domain() {
 
 #[test]
 fn test_resolve() {
-    println!("{:?}", resolve("google.com".to_owned(), DnsType::TYPE_A as u16));
-    println!("{:?}", resolve("www.metafilter.com".to_owned(), DnsType::TYPE_A as u16));
+    let mut resolver = DNSResolver::new(None);
+    println!(
+        "{:?}",
+        resolver.resolve("google.com".to_owned(), DnsType::TYPE_A as u16)
+    );
+    println!(
+        "{:?}",
+        resolver.resolve("www.metafilter.com".to_owned(), DnsType::TYPE_A as u16)
+    );
     // println!("{:?}", resolve("www.facebook.com".to_owned(), DnsType::TYPE_A as u16));
 }
-

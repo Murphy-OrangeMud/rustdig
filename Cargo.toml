@@ -1,5 +1,5 @@
 [package]
-name = "dns_weekend"
+name = "rsdig"
 version = "0.1.0"
 edition = "2021"
 
@@ -13,6 +13,7 @@ rand = "0.8.5"
 num = "0.4"
 num-derive = "0.3"
 num-traits = "0.2"
+clap = { version = "4.3.8", features = ["derive"] }
 
 [lib]
 proc-macro = true

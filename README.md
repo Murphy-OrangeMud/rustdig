@@ -17,4 +17,6 @@ Just type `cargo run` to start!
 - [x] Support commandline use
 - [ ] Support EDNS0
 - [ ] Support DNS over TCP
+- [ ] Support DNS over TLS
+- [ ] Support DNS over QUIC
 
