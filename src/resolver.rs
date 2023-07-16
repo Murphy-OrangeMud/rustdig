@@ -6,11 +6,9 @@ use std::time::Instant;
 
 use rustls::{OwnedTrustAnchor, RootCertStore};
 
-extern crate h2;
 use h2::client;
 use http::{Request, Version};
-use tokio_rustls::rustls::ServerName;
-use tokio_rustls::{rustls, TlsConnector};
+use tokio_rustls::{TlsConnector};
 
 use crate::*;
 
@@ -124,9 +122,9 @@ impl DNSResolver {
         record_type: u16,
     ) -> Result<DNSPacket> {
         let query = self.build_query(domain_name, record_type);
-        let mut root_store = RootCertStore::empty();
+        let mut root_store = rustls::RootCertStore::empty();
         root_store.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
-            OwnedTrustAnchor::from_subject_spki_name_constraints(
+            rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(
                 ta.subject,
                 ta.spki,
                 ta.name_constraints,
@@ -208,7 +206,7 @@ impl DNSResolver {
             let tcp = tokio::net::TcpStream::connect(ip_address.clone() + ":443")
                 .await
                 .expect("TCP connection failed");
-            let tls = TlsConnector::from(tls_client_config).connect(ServerName::try_from(ip_address.clone().as_str()).unwrap(), tcp).await.expect("Build tls connection failed");
+            let tls = TlsConnector::from(tls_client_config).connect(ip_address.clone().as_str().try_into().unwrap(), tcp).await.expect("Build tls connection failed");
             let (mut client, h2) = client::handshake(tls).await.expect("H2 handshake error");
             let (response, mut stream) = client.send_request(request, false).expect("Build h2 connection failed");
             stream.send_data(query.into(), true).expect("Failed to send data through h2 stream");
