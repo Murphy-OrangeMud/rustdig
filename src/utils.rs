@@ -77,7 +77,7 @@ pub fn ip_to_string(ip: &Vec<u8>) -> String {
 
 pub fn lookup_domain(domain_name: String) -> String {
     // let packet = resolve(domain_name, DnsType::TYPE_A as u16);
-    let packet = DNSResolver::new(None, DnsMode::UDP)
+    let packet = DNSResolver::new(None, None, DnsMode::UDP)
         .send_query("8.8.8.8".to_owned(), domain_name, DnsType::TYPE_A as u16)
         .expect("Send query failed");
     ip_to_string(&packet.answers[0].data)

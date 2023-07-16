@@ -5,7 +5,6 @@ use rsdig::{Deserializer, Serializer};
 pub struct DNSHeader {
     // for tcp
     // pub length: Option<u16>,
-
     pub id: u16,
     pub flags: u16,
     pub num_questions: u16,
@@ -200,7 +199,6 @@ impl DNSPacket {
 fn test_parse_header() {
     let header = DNSHeader {
         //length: None,
-
         id: 1,
         flags: RECURSION_DESIRED,
         num_questions: 1,
@@ -246,4 +244,3 @@ fn test_parse_record() {
     };
     println!("{:?}", DNSRecord::parse(&mut reader));
 }
-

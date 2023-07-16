@@ -114,7 +114,7 @@ pub fn derive_deserializer(input: proc_macro::TokenStream) -> proc_macro::TokenS
                             DnsMode::TCP => Some(u16::from_be_bytes(*decoded.next().unwrap())),
                             _ => unimplemented!()
                         };
-                    )
+                    );
                 }
                 match &field.ty {
                     Type::Path(path) if path.path.get_ident().is_some_and(|path| path == "u16") => {
