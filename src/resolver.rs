@@ -269,6 +269,36 @@ fn test_send_query_tcp() {
             )
             .unwrap()
     );
+    println!(
+        "{:?}",
+        resolver
+            .send_query_tcp(
+                "8.8.8.8:53".to_owned(),
+                "www.example.com".to_owned(),
+                DnsType::TYPE_AAAA as u16
+            )
+            .unwrap()
+    );
+    println!(
+        "{:?}",
+        resolver
+            .send_query_tcp(
+                "8.8.8.8:53".to_owned(),
+                "google.com".to_owned(),
+                DnsType::TYPE_AAAA as u16
+            )
+            .unwrap()
+    );
+    println!(
+        "{:?}",
+        resolver
+            .send_query_tcp(
+                "8.8.8.8:53".to_owned(),
+                "www.facebook.com".to_owned(),
+                DnsType::TYPE_AAAA as u16
+            )
+            .unwrap()
+    );
 }
 
 #[test]
