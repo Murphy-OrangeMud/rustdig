@@ -175,9 +175,9 @@ impl DNSResolver {
         record_type: u16,
     ) -> Result<DNSPacket> {
         let tls_client_config = std::sync::Arc::new({
-            let mut root_store = RootCertStore::empty();
+            let mut root_store = tokio_rustls::rustls::RootCertStore::empty();
             root_store.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
-                OwnedTrustAnchor::from_subject_spki_name_constraints(
+                tokio_rustls::rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(
                     ta.subject,
                     ta.spki,
                     ta.name_constraints,
@@ -216,8 +216,6 @@ impl DNSResolver {
                 }
             });
             let mut body = response.await.expect("Wait for response error").into_body();
-
-            println!("Oh yes");
 
             while let Some(chunk) = body.data().await {
                 buf.append(&mut chunk.expect("Read data from h2 stream error").into());
