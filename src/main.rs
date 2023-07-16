@@ -8,7 +8,7 @@ use rsdig::{Deserializer, Serializer};
 use std::collections::HashMap;
 use std::io::Result;
 
-use clap::{arg, Command};
+use clap::{arg, Command, Arg, ArgAction};
 use std::net::{IpAddr, Ipv6Addr, UdpSocket};
 use std::process::exit;
 use std::time::{Duration, Instant};
@@ -51,18 +51,18 @@ fn main() {
         .author(env!("CARGO_PKG_AUTHORS"))
         .about(env!("CARGO_PKG_DESCRIPTION"))
         .disable_help_subcommand(true)
-        .long_flag("tcp")
-        .long_flag("tls")
-        .long_flag("quic")
         .args(
             [
                 arg!(-n --domain_name <DOMAIN_NAME> "The domain name you want to lookup"),
-                arg!(-v --version <IP_VERSION> "The ip address version you want to lookup, 4 or 6, default IPv4"),
                 arg!(-s --server_ip <IPADDR> "The IP address and port you want to listen on"),
                 arg!(-d --dns_server <DNS_SERVER> "The dns server to be sent query, default 198.41.0.4"),
+                Arg::new("tcp").long("tcp").action(ArgAction::SetTrue),
+                Arg::new("tls").long("tls").action(ArgAction::SetTrue),
+                Arg::new("quic").long("quic").action(ArgAction::SetTrue),
                 // arg!(-f --file_path <FILE_PATH> "The file path with dns server listed"),
             ]
-        ).get_matches();
+        )
+        .get_matches();
 
     let domain_name = matches.get_one::<String>("domain_name");
     let server_ip = matches.get_one::<String>("server_ip");
@@ -71,16 +71,16 @@ fn main() {
     let tls_mode = matches.get_flag("tls");
     let quic_mode = matches.get_flag("quic");
 
-    let mut dns_mode: DnsMode;
+    let dns_mode: DnsMode = 
     if quic_mode {
-        dns_mode = DnsMode::QUIC;
+        DnsMode::QUIC
     } else if tls_mode {
-        dns_mode = DnsMode::TLS;
+        DnsMode::TLS
     } else if tcp_mode {
-        dns_mode = DnsMode::TCP;
+        DnsMode::TCP
     } else {
-        dns_mode = DnsMode::UDP;
-    }
+        DnsMode::UDP
+    };
 
     if domain_name.is_none() && server_ip.is_none() {
         eprintln!(

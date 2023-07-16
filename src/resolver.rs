@@ -2,6 +2,9 @@ use std::collections::HashMap;
 use std::io::{Read, Result, Write};
 use std::net::{IpAddr, Ipv6Addr, TcpStream, UdpSocket};
 use std::time::Instant;
+use std::sync::Arc;
+
+use rustls::{RootCertStore, OwnedTrustAnchor};
 
 use crate::*;
 
@@ -16,7 +19,7 @@ impl DNSResolver {
         if dns_server.is_none() || IpAddr::from_str(dns_server.unwrap()).is_err() {
             DNSResolver {
                 cache: HashMap::<String, (String, Instant)>::new(),
-                dns_server: "198.41.0.4".to_string(),
+                dns_server: "8.8.8.8".to_string(),
                 dns_mode,
             }
         } else {
@@ -46,7 +49,7 @@ impl DNSResolver {
             class: CLASS_IN,
         };
         let mut buf = [header.to_bytes(), question.to_bytes()].concat();
-        if self.dns_mode == DnsMode::TCP {
+        if self.dns_mode != DnsMode::UDP {
             buf = [(buf.len() as u16).to_be_bytes().to_vec(), buf].concat();
         }
         return buf;
@@ -64,7 +67,7 @@ impl DNSResolver {
             Err(_) => UdpSocket::bind("0.0.0.0:1234").expect("Bind failed"),
         };
         socket
-            .send_to(query.as_slice(), ip_address)
+            .send_to(query.as_slice(), ip_address + ":53")
             .expect("Send failed");
 
         let mut buf = [0 as u8; 1024];
@@ -83,7 +86,7 @@ impl DNSResolver {
         record_type: u16,
     ) -> Result<DNSPacket> {
         let query = self.build_query(domain_name, record_type);
-        let mut stream = TcpStream::connect(ip_address)?;
+        let mut stream = TcpStream::connect(ip_address + ":53")?;
         let n = stream.write(&query)?;
         if n < query.len() {
             return Err(std::io::Error::new(
@@ -110,7 +113,31 @@ impl DNSResolver {
         domain_name: String,
         record_type: u16,
     ) -> Result<DNSPacket> {
-        unimplemented!()
+        let query = self.build_query(domain_name, record_type);
+        let mut root_store = RootCertStore::empty();
+        root_store.add_server_trust_anchors(
+            webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
+                OwnedTrustAnchor::from_subject_spki_name_constraints(ta.subject, ta.spki, ta.name_constraints)
+            })
+        );
+        let config = rustls::ClientConfig::builder().with_safe_defaults().with_root_certificates(root_store).with_no_client_auth();
+        let mut conn = rustls::ClientConnection::new(Arc::new(config), ip_address.as_str().try_into().unwrap()).expect("TLS connect failed");
+        let mut sock = TcpStream::connect(ip_address + ":853").expect("TCP connect failed");
+        let mut tls = rustls::Stream::new(&mut conn, &mut sock);
+        tls.write(&query).expect("TLS write buffer failed");
+        let ciphersuite = tls.conn.negotiated_cipher_suite().unwrap();
+        // debug!("Ciphersuite: {:?}", ciphersuite);
+        let mut lenbuf = [0 as u8; 2];
+        tls.read(&mut lenbuf)?;
+        let length = u16::from_be_bytes(lenbuf);
+        let mut buf = Vec::new();
+        buf.resize(length.into(), 0);
+        tls.read(&mut buf)?;
+        let mut reader = DecodeHelper {
+            buffer: buf.to_vec(),
+            pos: 0,
+        };
+        Ok(DNSPacket::parse(&mut reader, self.dns_mode))
     }
 
     pub fn send_query_quic(
@@ -123,7 +150,7 @@ impl DNSResolver {
     }
 
     pub fn resolve(&mut self, domain_name_: String, record_type: u16) -> String {
-        let mut nameserver_ip = self.dns_server.clone() + ":53";
+        let mut nameserver_ip = self.dns_server.clone();
         let mut domain_name = domain_name_.clone();
         loop {
             println!("querying {nameserver_ip} for {domain_name}");
@@ -155,7 +182,7 @@ impl DNSResolver {
                     .insert(domain_name_.clone(), (ip_to_string(&ip), Instant::now()));
                 return ip_to_string(&ip);
             } else if let Some(ns_ip) = resp.get_nameserver_ip() {
-                nameserver_ip = ip_to_string(&ns_ip) + ":53";
+                nameserver_ip = ip_to_string(&ns_ip);
             } else if let Some(ns_domain) = resp.get_nameserver() {
                 nameserver_ip = self.resolve(
                     std::str::from_utf8(ns_domain.as_slice())
@@ -178,7 +205,7 @@ fn test_send_query() {
         "{:?}",
         resolver
             .send_query(
-                "8.8.8.8:53".to_owned(),
+                "8.8.8.8".to_owned(),
                 "www.example.com".to_owned(),
                 DnsType::TYPE_A as u16
             )
@@ -188,7 +215,7 @@ fn test_send_query() {
         "{:?}",
         resolver
             .send_query(
-                "8.8.8.8:53".to_owned(),
+                "8.8.8.8".to_owned(),
                 "google.com".to_owned(),
                 DnsType::TYPE_A as u16
             )
@@ -198,7 +225,7 @@ fn test_send_query() {
         "{:?}",
         resolver
             .send_query(
-                "8.8.8.8:53".to_owned(),
+                "8.8.8.8".to_owned(),
                 "www.facebook.com".to_owned(),
                 DnsType::TYPE_A as u16
             )
@@ -208,7 +235,7 @@ fn test_send_query() {
         "{:?}",
         resolver
             .send_query(
-                "8.8.8.8:53".to_owned(),
+                "8.8.8.8".to_owned(),
                 "www.example.com".to_owned(),
                 DnsType::TYPE_AAAA as u16
             )
@@ -218,7 +245,7 @@ fn test_send_query() {
         "{:?}",
         resolver
             .send_query(
-                "8.8.8.8:53".to_owned(),
+                "8.8.8.8".to_owned(),
                 "google.com".to_owned(),
                 DnsType::TYPE_AAAA as u16
             )
@@ -228,7 +255,7 @@ fn test_send_query() {
         "{:?}",
         resolver
             .send_query(
-                "8.8.8.8:53".to_owned(),
+                "8.8.8.8".to_owned(),
                 "www.facebook.com".to_owned(),
                 DnsType::TYPE_AAAA as u16
             )
@@ -243,7 +270,7 @@ fn test_send_query_tcp() {
         "{:?}",
         resolver
             .send_query_tcp(
-                "8.8.8.8:53".to_owned(),
+                "8.8.8.8".to_owned(),
                 "www.example.com".to_owned(),
                 DnsType::TYPE_A as u16
             )
@@ -253,7 +280,7 @@ fn test_send_query_tcp() {
         "{:?}",
         resolver
             .send_query_tcp(
-                "8.8.8.8:53".to_owned(),
+                "8.8.8.8".to_owned(),
                 "google.com".to_owned(),
                 DnsType::TYPE_A as u16
             )
@@ -263,7 +290,7 @@ fn test_send_query_tcp() {
         "{:?}",
         resolver
             .send_query_tcp(
-                "8.8.8.8:53".to_owned(),
+                "8.8.8.8".to_owned(),
                 "www.facebook.com".to_owned(),
                 DnsType::TYPE_A as u16
             )
@@ -273,7 +300,7 @@ fn test_send_query_tcp() {
         "{:?}",
         resolver
             .send_query_tcp(
-                "8.8.8.8:53".to_owned(),
+                "8.8.8.8".to_owned(),
                 "www.example.com".to_owned(),
                 DnsType::TYPE_AAAA as u16
             )
@@ -283,7 +310,7 @@ fn test_send_query_tcp() {
         "{:?}",
         resolver
             .send_query_tcp(
-                "8.8.8.8:53".to_owned(),
+                "8.8.8.8".to_owned(),
                 "google.com".to_owned(),
                 DnsType::TYPE_AAAA as u16
             )
@@ -293,7 +320,72 @@ fn test_send_query_tcp() {
         "{:?}",
         resolver
             .send_query_tcp(
-                "8.8.8.8:53".to_owned(),
+                "8.8.8.8".to_owned(),
+                "www.facebook.com".to_owned(),
+                DnsType::TYPE_AAAA as u16
+            )
+            .unwrap()
+    );
+}
+
+#[test]
+fn test_send_query_tls() {
+    let mut resolver = DNSResolver::new(None, DnsMode::TLS);
+    println!(
+        "{:?}",
+        resolver
+            .send_query_tls(
+                "8.8.8.8".to_owned(),
+                "www.example.com".to_owned(),
+                DnsType::TYPE_A as u16
+            )
+            .unwrap()
+    );
+    println!(
+        "{:?}",
+        resolver
+            .send_query_tls(
+                "8.8.8.8".to_owned(),
+                "google.com".to_owned(),
+                DnsType::TYPE_A as u16
+            )
+            .unwrap()
+    );
+    println!(
+        "{:?}",
+        resolver
+            .send_query_tls(
+                "8.8.8.8".to_owned(),
+                "www.facebook.com".to_owned(),
+                DnsType::TYPE_A as u16
+            )
+            .unwrap()
+    );
+    println!(
+        "{:?}",
+        resolver
+            .send_query_tls(
+                "8.8.8.8".to_owned(),
+                "www.example.com".to_owned(),
+                DnsType::TYPE_AAAA as u16
+            )
+            .unwrap()
+    );
+    println!(
+        "{:?}",
+        resolver
+            .send_query_tls(
+                "8.8.8.8".to_owned(),
+                "google.com".to_owned(),
+                DnsType::TYPE_AAAA as u16
+            )
+            .unwrap()
+    );
+    println!(
+        "{:?}",
+        resolver
+            .send_query_tls(
+                "8.8.8.8".to_owned(),
                 "www.facebook.com".to_owned(),
                 DnsType::TYPE_AAAA as u16
             )
@@ -318,6 +410,19 @@ fn test_resolve() {
 #[test]
 fn test_resolve_tcp() {
     let mut resolver = DNSResolver::new(None, DnsMode::TCP);
+    println!(
+        "{:?}",
+        resolver.resolve("google.com".to_owned(), DnsType::TYPE_A as u16)
+    );
+    println!(
+        "{:?}",
+        resolver.resolve("www.metafilter.com".to_owned(), DnsType::TYPE_A as u16)
+    );
+}
+
+#[test]
+fn test_resolve_tls() {
+    let mut resolver = DNSResolver::new(None, DnsMode::TLS);
     println!(
         "{:?}",
         resolver.resolve("google.com".to_owned(), DnsType::TYPE_A as u16)
