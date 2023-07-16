@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::io::Result;
 
 use clap::{arg, Command};
-use std::net::{IpAddr, UdpSocket, Ipv6Addr};
+use std::net::{IpAddr, Ipv6Addr, UdpSocket};
 use std::process::exit;
 use std::time::{Duration, Instant};
 
@@ -18,12 +18,12 @@ extern crate num;
 extern crate num_derive;
 
 pub mod parse;
-pub mod utils;
 pub mod resolver;
+pub mod utils;
 
 use crate::parse::*;
-use crate::utils::*;
 use crate::resolver::*;
+use crate::utils::*;
 
 const RECURSION_DESIRED: u16 = 1 << 8;
 const CLASS_IN: u16 = 1;
@@ -37,7 +37,7 @@ pub enum DnsType {
     TYPE_AAAA = 28,
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Copy, Clone, Debug)]
 pub enum DnsMode {
     UDP = 0,
     TCP = 1,
@@ -98,7 +98,5 @@ fn main() {
             resolver.resolve(domain_name.unwrap().to_owned(), DnsType::TYPE_AAAA as u16)
         );
     } else {
-
     }
 }
-

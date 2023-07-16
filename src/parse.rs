@@ -1,9 +1,11 @@
-use rsdig::{Deserializer, Serializer};
 use crate::*;
-
+use rsdig::{Deserializer, Serializer};
 
 #[derive(Serializer, Deserializer, Debug, PartialEq)]
 pub struct DNSHeader {
+    // for tcp
+    // pub length: Option<u16>,
+
     pub id: u16,
     pub flags: u16,
     pub num_questions: u16,
@@ -121,8 +123,17 @@ pub struct DNSPacket {
 }
 
 impl DNSPacket {
-    pub fn parse(reader: &mut DecodeHelper) -> DNSPacket {
-        let header: DNSHeader = DNSHeader::parse(reader);
+    pub fn parse(reader: &mut DecodeHelper, dns_mode: DnsMode) -> DNSPacket {
+        let length = match dns_mode {
+            DnsMode::UDP => None,
+            DnsMode::TCP => {
+                let ret = Some(u16::from_be_bytes(*reader.buffer.array_chunks::<2>().next().unwrap()));
+                reader.buffer = reader.buffer[2..reader.buffer.len()].to_vec();
+                ret
+            },
+            _ => unimplemented!()
+        }; // for later use, refer to RFC
+        let header: DNSHeader = DNSHeader::parse(reader, dns_mode);
         let mut questions = Vec::<DNSQuestion>::new();
         let mut answers = Vec::<DNSRecord>::new();
         let mut authorities = Vec::<DNSRecord>::new();
@@ -197,6 +208,8 @@ impl DNSPacket {
 #[test]
 fn test_parse_header() {
     let header = DNSHeader {
+        //length: None,
+
         id: 1,
         flags: RECURSION_DESIRED,
         num_questions: 1,
@@ -208,7 +221,7 @@ fn test_parse_header() {
         buffer: header.to_bytes(),
         pos: 0,
     };
-    assert_eq!(DNSHeader::parse(&mut reader), header);
+    assert_eq!(DNSHeader::parse(&mut reader, DnsMode::UDP), header);
 }
 
 #[test]

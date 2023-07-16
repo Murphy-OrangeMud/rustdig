@@ -2,12 +2,19 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{parse_macro_input, Data, DeriveInput, Field, Fields, Type};
 extern crate proc_macro;
+use syn::{GenericArgument, Path, PathArguments};
 
 #[proc_macro_derive(Serializer)]
 pub fn derive_serializer(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input_ = input.into();
     let input = parse_macro_input!(input_ as DeriveInput);
     let ident = input.ident;
+
+    fn path_is_option(path: &Path) -> bool {
+        path.leading_colon.is_none()
+            && path.segments.len() == 1
+            && path.segments.iter().next().unwrap().ident == "Option"
+    }
 
     if let Data::Struct(r#struct) = input.data {
         let fields = r#struct.fields;
@@ -25,6 +32,45 @@ pub fn derive_serializer(input: proc_macro::TokenStream) -> proc_macro::TokenStr
                             self.#name.to_be_bytes().to_vec(),
                         )
                     }
+
+                    Type::Path(typepath)
+                        if typepath.qself.is_none() && path_is_option(&typepath.path) =>
+                    {
+                        let type_params = &typepath.path.segments.iter().next().unwrap().arguments;
+                        // It should have only on angle-bracketed param ("<String>"):
+                        let generic_arg = match type_params {
+                            PathArguments::AngleBracketed(params) => {
+                                params.args.iter().next().unwrap()
+                            }
+                            _ => unimplemented!(),
+                        };
+                        // This argument must be a type:
+                        let type_ = match generic_arg {
+                            GenericArgument::Type(ty) => ty,
+                            _ => unimplemented!(),
+                        };
+                        match type_ {
+                            Type::Path(path)
+                                if path
+                                    .path
+                                    .get_ident()
+                                    .is_some_and(|path| path == "u16" || path == "u32") =>
+                            {
+                                quote!(
+                                    match self.#name {
+                                        Some(len) => len.to_be_bytes().to_vec(),
+                                        None => Vec::<u8>::new(),
+                                    },
+                                )
+                            }
+                            _ => {
+                                quote!(
+                                    self.#name.clone(),
+                                )
+                            }
+                        }
+                    }
+
                     _ => {
                         quote!(
                             self.#name.clone(),
@@ -58,8 +104,17 @@ pub fn derive_deserializer(input: proc_macro::TokenStream) -> proc_macro::TokenS
                 let name = field.clone().ident.unwrap();
                 if name == "name" {
                     return quote!(
-                        let #name = decode_name()
+                        let #name = reader.decode_name();
                     );
+                }
+                if name == "length" {
+                    return quote!(
+                        let #name = match dns_mode {
+                            DnsMode::UDP => None,
+                            DnsMode::TCP => Some(u16::from_be_bytes(*decoded.next().unwrap())),
+                            _ => unimplemented!()
+                        };
+                    )
                 }
                 match &field.ty {
                     Type::Path(path) if path.path.get_ident().is_some_and(|path| path == "u16") => {
@@ -85,7 +140,7 @@ pub fn derive_deserializer(input: proc_macro::TokenStream) -> proc_macro::TokenS
             }));
             return quote!(
                 impl #ident {
-                    pub fn parse(reader: &mut DecodeHelper) -> #ident {
+                    pub fn parse(reader: &mut DecodeHelper, dns_mode: DnsMode) -> #ident {
                         let mut decoded = reader.buffer[reader.pos..12 + reader.pos].array_chunks::<2>();
                         reader.pos += 12;
                         #set_fields

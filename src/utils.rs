@@ -75,28 +75,10 @@ pub fn ip_to_string(ip: &Vec<u8>) -> String {
     }
 }
 
-pub fn build_query(domain_name: String, record_type: u16) -> Vec<u8> {
-    let name = encode_dns_name(domain_name);
-    let id: u16 = random();
-    let header = DNSHeader {
-        id,
-        flags: RECURSION_DESIRED,
-        num_questions: 1,
-        num_answers: 0,
-        num_authorities: 0,
-        num_additionals: 0,
-    };
-    let question = DNSQuestion {
-        name,
-        type_: record_type,
-        class: CLASS_IN,
-    };
-    return [header.to_bytes(), question.to_bytes()].concat();
-}
-
 pub fn lookup_domain(domain_name: String) -> String {
     // let packet = resolve(domain_name, DnsType::TYPE_A as u16);
-    let packet = DNSResolver::new(None, DnsMode::UDP).send_query("8.8.8.8:53".to_owned(), domain_name, DnsType::TYPE_A as u16)
+    let packet = DNSResolver::new(None, DnsMode::UDP)
+        .send_query("8.8.8.8:53".to_owned(), domain_name, DnsType::TYPE_A as u16)
         .expect("Send query failed");
     ip_to_string(&packet.answers[0].data)
 }
@@ -107,22 +89,9 @@ fn test_encode_dns_name() {
     println!("{:?}", encode_dns_name("google.com".to_owned()));
     let mut reader = DecodeHelper {
         buffer: encode_dns_name("google.com".to_owned()),
-        pos: 0
-    };
-    assert_eq!(
-        reader.decode_name(),
-        "google.com".as_bytes()
-    )
-}
-
-#[test]
-fn test_build_query() {
-    let query = build_query("www.example.com".to_owned(), 1);
-    let mut reader = DecodeHelper {
-        buffer: query.clone(),
         pos: 0,
     };
-    println!("{:?}: {:?}", query, DNSPacket::parse(&mut reader));
+    assert_eq!(reader.decode_name(), "google.com".as_bytes())
 }
 
 #[test]
