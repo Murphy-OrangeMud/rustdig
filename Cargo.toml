@@ -21,6 +21,8 @@ h2 = "0.3"
 http = "0.2"
 futures = "0.3.*"
 tokio-rustls = "0.24.1"
+dashmap = "5.4.0"
+lazy_static = "1.4.0"
 
 [lib]
 proc-macro = true

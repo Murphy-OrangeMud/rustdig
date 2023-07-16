@@ -1,19 +1,14 @@
-use std::collections::HashMap;
 use std::io::{Read, Result, Write};
 use std::net::{IpAddr, Ipv6Addr, TcpStream, UdpSocket};
 use std::sync::Arc;
-use std::time::Instant;
-
-use rustls::{OwnedTrustAnchor, RootCertStore};
 
 use h2::client;
 use http::{Request, Version};
-use tokio_rustls::{TlsConnector};
+use tokio_rustls::TlsConnector;
 
 use crate::*;
 
 pub struct DNSResolver {
-    cache: HashMap<String, (String, Instant)>,
     dns_server: String,
     uri: Option<String>,
     dns_mode: DnsMode,
@@ -27,19 +22,21 @@ impl DNSResolver {
     ) -> DNSResolver {
         if dns_server.is_none() || IpAddr::from_str(dns_server.unwrap()).is_err() {
             DNSResolver {
-                cache: HashMap::<String, (String, Instant)>::new(),
                 dns_server: "8.8.8.8".to_string(),
                 dns_mode,
                 uri: Some("https://dns.google/dns-query".to_string()),
             }
         } else {
             DNSResolver {
-                cache: HashMap::<String, (String, Instant)>::new(),
                 dns_server: dns_server.unwrap().to_string(),
                 dns_mode,
                 uri: uri.cloned(),
             }
         }
+    }
+
+    pub fn set_mode(&mut self, mode: DnsMode) {
+        self.dns_mode = mode;
     }
 
     pub fn build_query(&self, domain_name: String, record_type: u16) -> Vec<u8> {
@@ -62,8 +59,35 @@ impl DNSResolver {
         [header.to_bytes(), question.to_bytes()].concat()
     }
 
+    pub fn build_answer(&self, domain_name: String, record_type: u16, ip: String) -> Vec<u8> {
+        let name = encode_dns_name(domain_name);
+        let id: u16 = random();
+        let header = DNSHeader {
+            id,
+            flags: RECURSION_DESIRED,
+            num_questions: 1, // atm we only support this
+            num_answers: 1,
+            num_authorities: 0,
+            num_additionals: 0,
+        };
+        // Currently we consult the root servers each time so we don't have authorities
+        let question = DNSQuestion {
+            name: name.clone(),
+            type_: record_type,
+            class: CLASS_IN,
+        };
+        let answer = DNSRecord {
+            name,
+            type_: record_type,
+            class: CLASS_IN,
+            ttl: 60, // 60 seconds
+            data: string_to_be_ip(ip),
+        };
+        [header.to_bytes(), question.to_bytes(), answer.to_bytes()].concat()
+    }
+
     pub fn send_query(
-        &mut self,
+        &self,
         ip_address: String,
         domain_name: String,
         record_type: u16,
@@ -87,7 +111,7 @@ impl DNSResolver {
     }
 
     pub fn send_query_tcp(
-        &mut self,
+        &self,
         ip_address: String,
         domain_name: String,
         record_type: u16,
@@ -116,7 +140,7 @@ impl DNSResolver {
     }
 
     pub fn send_query_tls(
-        &mut self,
+        &self,
         ip_address: String,
         domain_name: String,
         record_type: u16,
@@ -159,7 +183,7 @@ impl DNSResolver {
     }
 
     pub fn send_query_quic(
-        &mut self,
+        &self,
         ip_address: String,
         domain_name: String,
         record_type: u16,
@@ -168,7 +192,7 @@ impl DNSResolver {
     }
 
     pub fn send_query_https(
-        &mut self,
+        &self,
         ip_address: String,
         uri: String,
         domain_name: String,
@@ -176,14 +200,16 @@ impl DNSResolver {
     ) -> Result<DNSPacket> {
         let tls_client_config = std::sync::Arc::new({
             let mut root_store = tokio_rustls::rustls::RootCertStore::empty();
-            root_store.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
-                tokio_rustls::rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(
-                    ta.subject,
-                    ta.spki,
-                    ta.name_constraints,
-                )
-            }));
-    
+            root_store.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(
+                |ta| {
+                    tokio_rustls::rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(
+                        ta.subject,
+                        ta.spki,
+                        ta.name_constraints,
+                    )
+                },
+            ));
+
             let mut c = tokio_rustls::rustls::ClientConfig::builder()
                 .with_safe_defaults()
                 .with_root_certificates(root_store)
@@ -206,10 +232,17 @@ impl DNSResolver {
             let tcp = tokio::net::TcpStream::connect(ip_address.clone() + ":443")
                 .await
                 .expect("TCP connection failed");
-            let tls = TlsConnector::from(tls_client_config).connect(ip_address.clone().as_str().try_into().unwrap(), tcp).await.expect("Build tls connection failed");
+            let tls = TlsConnector::from(tls_client_config)
+                .connect(ip_address.clone().as_str().try_into().unwrap(), tcp)
+                .await
+                .expect("Build tls connection failed");
             let (mut client, h2) = client::handshake(tls).await.expect("H2 handshake error");
-            let (response, mut stream) = client.send_request(request, false).expect("Build h2 connection failed");
-            stream.send_data(query.into(), true).expect("Failed to send data through h2 stream");
+            let (response, mut stream) = client
+                .send_request(request, false)
+                .expect("Build h2 connection failed");
+            stream
+                .send_data(query.into(), true)
+                .expect("Failed to send data through h2 stream");
             tokio::spawn(async move {
                 if let Err(e) = h2.await {
                     println!("GOT ERR={:?}", e);
@@ -222,8 +255,12 @@ impl DNSResolver {
             }
         };
 
-        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async_block);
-        
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async_block);
+
         let mut reader = DecodeHelper {
             buffer: buf,
             pos: 0,
@@ -232,7 +269,7 @@ impl DNSResolver {
         Ok(DNSPacket::parse(&mut reader, self.dns_mode))
     }
 
-    pub fn resolve(&mut self, domain_name_: String, record_type: u16) -> String {
+    pub fn resolve(&self, domain_name_: String, record_type: u16) -> String {
         let mut nameserver_ip = self.dns_server.clone();
         let mut uri = if self.dns_mode == DnsMode::HTTPS {
             self.uri.clone().unwrap()
@@ -242,12 +279,6 @@ impl DNSResolver {
         let mut domain_name = domain_name_.clone();
         loop {
             println!("querying {nameserver_ip} for {domain_name}");
-            let opt = self.cache.get(&domain_name);
-            if opt.is_some()
-                && opt.unwrap().1.elapsed().as_secs() < Duration::SECOND.as_secs() * 7200
-            {
-                return opt.unwrap().0.clone();
-            }
             let record: Option<String> = None;
             let resp = match self.dns_mode {
                 DnsMode::UDP => self
@@ -274,8 +305,8 @@ impl DNSResolver {
             if let Some(domain) = resp.get_cname() {
                 domain_name = std::str::from_utf8(&domain).unwrap().to_owned();
             } else if let Some(ip) = resp.get_answer(record) {
-                self.cache
-                    .insert(domain_name_.clone(), (ip_to_string(&ip), Instant::now()));
+                /*  self.cache
+                .insert(domain_name_.clone(), (ip_to_string(&ip), Instant::now())); */
                 return ip_to_string(&ip);
             } else if let Some(ns_ip) = resp.get_nameserver_ip() {
                 nameserver_ip = ip_to_string(&ns_ip);

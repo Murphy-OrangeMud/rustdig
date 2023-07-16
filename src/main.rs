@@ -1,5 +1,6 @@
 #![feature(array_chunks)]
 #![feature(duration_constants)]
+#![feature(async_fn_in_trait)]
 
 use std::str::FromStr;
 
@@ -11,7 +12,9 @@ use std::io::Result;
 use clap::{arg, Arg, ArgAction, Command};
 use std::net::{IpAddr, Ipv6Addr, UdpSocket};
 use std::process::exit;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use lazy_static::lazy_static;
 
 extern crate num;
 #[macro_use]
@@ -19,10 +22,12 @@ extern crate num_derive;
 
 pub mod parse;
 pub mod resolver;
+pub mod server;
 pub mod utils;
 
 use crate::parse::*;
 use crate::resolver::*;
+use crate::server::*;
 use crate::utils::*;
 
 const RECURSION_DESIRED: u16 = 1 << 8;
@@ -46,7 +51,8 @@ pub enum DnsMode {
     QUIC = 4,
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let matches = Command::new(env!("CARGO_PKG_NAME"))
         .version(env!("CARGO_PKG_VERSION"))
         .author(env!("CARGO_PKG_AUTHORS"))
@@ -94,7 +100,9 @@ fn main() {
         );
         exit(1);
     } else if domain_name.is_some() {
-        if dns_mode == DnsMode::HTTPS && !(dns_server.is_none() && uri.is_none() || dns_server.is_some() && uri.is_some()) {
+        if dns_mode == DnsMode::HTTPS
+            && !(dns_server.is_none() && uri.is_none() || dns_server.is_some() && uri.is_some())
+        {
             eprintln!("DNS server should corresponding to URI in DoH mode!");
             exit(1);
         }
@@ -108,5 +116,11 @@ fn main() {
             resolver.resolve(domain_name.unwrap().to_owned(), DnsType::TYPE_AAAA as u16)
         );
     } else {
+        lazy_static!(
+            static ref server_udp: UDPServer = UDPServer::default();
+        );
+        // currently we only support UDP servers
+        let handle = std::thread::spawn(move || server_udp.start());
+        handle.join().expect("Join server failed").await;
     }
 }
