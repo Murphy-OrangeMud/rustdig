@@ -16,6 +16,11 @@ num-traits = "0.2"
 clap = { version = "4.3.8", features = ["derive"] }
 rustls = "0.21.5"
 webpki-roots = "0.24"
+tokio = { version = "1.29.1", features = ["full"] }
+h2 = "0.3"
+http = "0.2"
+futures = "0.3.*"
+tokio-rustls = "0.23.2"
 
 [lib]
 proc-macro = true

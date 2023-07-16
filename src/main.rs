@@ -8,7 +8,7 @@ use rsdig::{Deserializer, Serializer};
 use std::collections::HashMap;
 use std::io::Result;
 
-use clap::{arg, Command, Arg, ArgAction};
+use clap::{arg, Arg, ArgAction, Command};
 use std::net::{IpAddr, Ipv6Addr, UdpSocket};
 use std::process::exit;
 use std::time::{Duration, Instant};
@@ -42,7 +42,8 @@ pub enum DnsMode {
     UDP = 0,
     TCP = 1,
     TLS = 2,
-    QUIC = 3,
+    HTTPS = 3,
+    QUIC = 4,
 }
 
 fn main() {
@@ -55,9 +56,11 @@ fn main() {
             [
                 arg!(-n --domain_name <DOMAIN_NAME> "The domain name you want to lookup"),
                 arg!(-s --server_ip <IPADDR> "The IP address and port you want to listen on"),
-                arg!(-d --dns_server <DNS_SERVER> "The dns server to be sent query, default 198.41.0.4"),
+                arg!(-d --dns_server <DNS_SERVER> "The dns server to be sent query, default 8.8.8.8"),
+                arg!(-u --uri <URI> "The dns server uri to be sent query if you specify to use DNS over HTTPS, should be corresponding to the dns server"),
                 Arg::new("tcp").long("tcp").action(ArgAction::SetTrue),
                 Arg::new("tls").long("tls").action(ArgAction::SetTrue),
+                Arg::new("https").long("https").action(ArgAction::SetTrue),
                 Arg::new("quic").long("quic").action(ArgAction::SetTrue),
                 // arg!(-f --file_path <FILE_PATH> "The file path with dns server listed"),
             ]
@@ -67,13 +70,16 @@ fn main() {
     let domain_name = matches.get_one::<String>("domain_name");
     let server_ip = matches.get_one::<String>("server_ip");
     let dns_server = matches.get_one::<String>("dns_server");
+    let uri = matches.get_one::<String>("uri");
     let tcp_mode = matches.get_flag("tcp");
     let tls_mode = matches.get_flag("tls");
+    let https_mode = matches.get_flag("https");
     let quic_mode = matches.get_flag("quic");
 
-    let dns_mode: DnsMode = 
-    if quic_mode {
+    let dns_mode: DnsMode = if quic_mode {
         DnsMode::QUIC
+    } else if https_mode {
+        DnsMode::HTTPS
     } else if tls_mode {
         DnsMode::TLS
     } else if tcp_mode {
@@ -88,7 +94,11 @@ fn main() {
         );
         exit(1);
     } else if domain_name.is_some() {
-        let mut resolver = DNSResolver::new(dns_server, dns_mode);
+        if dns_mode == DnsMode::HTTPS && !(dns_server.is_none() && uri.is_none() || dns_server.is_some() && uri.is_some()) {
+            eprintln!("DNS server should corresponding to URI in DoH mode!");
+            exit(1);
+        }
+        let mut resolver = DNSResolver::new(dns_server, uri, dns_mode);
         println!(
             "{}",
             resolver.resolve(domain_name.unwrap().to_owned(), DnsType::TYPE_A as u16)
