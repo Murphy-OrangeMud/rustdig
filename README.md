@@ -15,7 +15,7 @@ Just type `cargo run` to start, add --name flag to specify the domain name you w
 - [x] DNS Cache
 - [x] Support commandline use
 - [ ] Support EDNS0
-- [ ] Support DNS over TCP
+- [x] Support DNS over TCP
 - [ ] Support DNS over TLS
 - [ ] Support DNS over QUIC
 - [ ] DNS Server

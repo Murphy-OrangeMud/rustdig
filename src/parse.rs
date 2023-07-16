@@ -124,15 +124,6 @@ pub struct DNSPacket {
 
 impl DNSPacket {
     pub fn parse(reader: &mut DecodeHelper, dns_mode: DnsMode) -> DNSPacket {
-        let length = match dns_mode {
-            DnsMode::UDP => None,
-            DnsMode::TCP => {
-                let ret = Some(u16::from_be_bytes(*reader.buffer.array_chunks::<2>().next().unwrap()));
-                reader.buffer = reader.buffer[2..reader.buffer.len()].to_vec();
-                ret
-            },
-            _ => unimplemented!()
-        }; // for later use, refer to RFC
         let header: DNSHeader = DNSHeader::parse(reader, dns_mode);
         let mut questions = Vec::<DNSQuestion>::new();
         let mut answers = Vec::<DNSRecord>::new();

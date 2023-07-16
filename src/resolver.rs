@@ -91,7 +91,11 @@ impl DNSResolver {
                 "Not written enough bytes",
             ));
         }
-        let mut buf = [0 as u8; 1024];
+        let mut lenbuf = [0 as u8; 2];
+        stream.read(&mut lenbuf)?;
+        let length = u16::from_be_bytes(lenbuf);
+        let mut buf = Vec::new();
+        buf.resize(length.into(), 0);
         stream.read(&mut buf)?;
         let mut reader = DecodeHelper {
             buffer: buf.to_vec(),
